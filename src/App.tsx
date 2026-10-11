@@ -19,7 +19,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ name: "tree" });
   const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
-  // True while a family file is waiting to be merged; the merge screen then replaces everything else.
+  // True while a family file is waiting to be merged, whether just chosen or left from the last
+  // time the app was open; the merge screen then replaces everything else.
   const [merging, setMerging] = useState(false);
 
   const reload = useCallback(async () => setData(await loadTree()), []);
@@ -88,6 +89,7 @@ export default function App() {
       reload={reload}
       onOpen={openPerson}
       onHelp={() => setView({ name: "help" })}
+      onMerge={() => setMerging(true)}
       initialSelectedId={lastOpenedId && index.byId.has(lastOpenedId) ? lastOpenedId : null}
     />
   );

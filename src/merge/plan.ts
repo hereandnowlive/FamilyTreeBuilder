@@ -23,7 +23,7 @@ export interface Snapshot {
   parent_child: Row[];
 }
 
-/** Tables in an order that satisfies their foreign keys when rows are inserted. */
+/** Tables in an order that satisfies their foreign keys when rows are inserted. Must match TABLES in src-tauri/src/merge.rs. */
 export const INSERT_ORDER = [
   "person",
   "event",

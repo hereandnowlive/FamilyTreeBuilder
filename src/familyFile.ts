@@ -53,19 +53,15 @@ export function timeStamp(): string {
 }
 
 /**
- * Asks for a family file to merge into the current tree. On success the app restarts into the
- * merge screen, where the user sees what would change before anything does.
+ * Asks for a family file to merge into the current tree and gets it ready. Returns true if the
+ * merge screen should now be shown, where the user sees what would change before anything does;
+ * false if they cancelled.
  */
-export async function mergeFamilyFileWithDialog(): Promise<void> {
+export async function mergeFamilyFileWithDialog(): Promise<boolean> {
   const path = await open({ title: "Merge a family file", multiple: false, filters: FILTERS });
-  if (!path) return;
-  const ok = await confirm(
-    "The app will restart and show you what this file would add to your tree, and any differences " +
-      "between the two that you need to settle.\n\nNothing is changed until you confirm the merge.",
-    { title: "Merge a family file", okLabel: "Continue" },
-  );
-  if (!ok) return;
+  if (!path) return false;
   await startMerge(path);
+  return true;
 }
 
 /**

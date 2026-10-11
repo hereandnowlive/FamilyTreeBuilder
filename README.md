@@ -186,7 +186,7 @@ Use this when two people have each made changes to their own copy. Merging combi
 ### How to merge
 
 1. On the tree screen, press **Merge file…** and choose the family file you were sent.
-2. The app restarts and shows the merge screen. Nothing has changed yet.
+2. The merge screen appears. Nothing has changed yet.
 3. Read **What the file adds**: the people, events, photos, recordings and family links that are in the file but not in your tree.
 4. If there is a **Differences to settle** list, choose **Keep mine** or **Use the file's** for each one. See below.
 5. Press **Merge into my tree**. To back out instead, press **Cancel merge** and nothing changes.
@@ -268,13 +268,13 @@ This part is not shown in the app.
 - **Tauri 2** (Rust) for the desktop shell, file handling, thumbnails and microphone recording
 - **React 19** and **TypeScript** with **Vite** for the interface
 - **Tailwind CSS 4** for styling
-- **SQLite** through `tauri-plugin-sql`, with the queries written in TypeScript
+- **SQLite** through `rusqlite`, with SQLite itself compiled into the app and the queries written in Rust
 - **React Flow** (`@xyflow/react`) and **dagre** for drawing and laying out the tree
 
 ### What you need
 
 - Node.js and npm
-- Rust, installed with `rustup`
+- Rust, installed with `rustup`. The exact version is pinned in `rust-toolchain.toml`, and rustup downloads it on the first build
 - On Linux, the Tauri system packages plus the ones for audio and the MP3 encoder:
   `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev build-essential libasound2-dev autoconf`
 - On Windows, the "Desktop development with C++" tools from Visual Studio Build Tools
@@ -289,7 +289,8 @@ Run these from the project folder.
 | `npm run app` | Runs the app for development, with live reload. |
 | `npm run build` | Type-checks and bundles the interface. A quick check after TypeScript changes. |
 | `npm run typecheck` | Type-checks only. |
-| `cargo test` (in `src-tauri`) | Runs the Rust tests. |
+| `npm test` | Runs the merge planner tests in `tests/`, one at a time, with Node's built-in test runner. |
+| `cargo test` (in `src-tauri`) | Runs the Rust tests: the database, migrations, merging and family files. |
 | `npm run app:build` | Builds the optimised app and its installers, and copies them to `installer/`. Takes several minutes. |
 | `npm run clean` | Deletes the Rust build output in `src-tauri/target`. Safe; the next build takes minutes. |
 
@@ -299,19 +300,21 @@ Tauri builds for the system it runs on, so the Windows installer has to be built
 
 | Path | Contents |
 | --- | --- |
-| `src/` | The interface. `db.ts` holds every database query and every call into Rust. |
+| `src/` | The interface. `db.ts` holds every call into Rust. |
 | `src/tree/` | The tree screen and its automatic layout. |
 | `src/person/` | The person page, events, the photo page and the recorder controls. |
 | `src/merge/` | Merging a family file: `plan.ts` works out what would change, `MergePage.tsx` is the review screen. |
 | `src/help/` | The Help page, which displays the guide section of this file. |
-| `src-tauri/src/` | The Rust side: `lib.rs` (commands), `family_file.rs`, `thumbnail.rs`, `recorder.rs`. |
+| `src-tauri/src/` | The Rust side: `lib.rs` (commands), `db.rs` (the database and every query), `merge.rs` (applying a merge), `family_file.rs`, `thumbnail.rs`, `recorder.rs`. |
+| `tests/` | Tests for the merge planner. |
 | `src-tauri/migrations/` | The database schema, as numbered SQL files. |
 | `scripts/copy-installer.mjs` | Gathers the built installers into `installer/` at the end of `npm run app:build`. |
 
 ### Things to know before changing it
 
-- **Never edit a migration that has been applied.** Add a new numbered file and register it in `lib.rs`. The app stores a checksum of each one and refuses to open the database if an old one changes. Under `npm run tauri dev`, a new migration is applied to your real data the moment the file is saved, so test the SQL on a copy first.
+- **Never edit a migration that has been applied.** Add a new numbered file and append it to `MIGRATIONS` in `db.rs`. The database only remembers how many migrations it has had, so an edit to an old one never reaches existing trees. Under `npm run tauri dev`, a new migration is applied to your real data the moment the file is saved, so test the SQL on a copy first.
 - **The database lives outside the project.** Development uses the same folders listed under "Where your information is kept", so the tree you see while developing is real data.
 - **Do not remove `src-tauri/.cargo/config.toml`.** It caps Cargo at 8 parallel compilers, because the default of one per core ran a 32-core, 30 GB machine out of memory during a release build. It also moves Cargo's build files to a path without spaces, which the MP3 encoder's build needs on Linux when the project folder has spaces in its path.
 - **The release build has no link-time optimisation**, for the same memory reason. See the comment above `[profile.release]` in `src-tauri/Cargo.toml` before adding it back.
+- **The content security policy only applies to a built app.** It is set in `src-tauri/tauri.conf.json` and limits what the window may load to the app's own files and stored photos and recordings. `npm run app` does not enforce it, so try anything that loads from a new kind of source in an installed build.
 - **The Help page is this file.** Edit the guide above and the app's Help page changes with the next build.

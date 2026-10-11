@@ -30,6 +30,8 @@ interface Props {
   reload: () => Promise<void>;
   onOpen: (personId: string) => void;
   onHelp: () => void;
+  /** Called once a family file has been chosen and unpacked for merging, to show the merge screen. */
+  onMerge: () => void;
   /** Person to show selected when the view opens (the one just visited). */
   initialSelectedId: string | null;
 }
@@ -42,7 +44,7 @@ export function TreeView(props: Props) {
   );
 }
 
-function TreeCanvas({ data, index, reload, onOpen, onHelp, initialSelectedId }: Props) {
+function TreeCanvas({ data, index, reload, onOpen, onHelp, onMerge, initialSelectedId }: Props) {
   const flow = useReactFlow();
   const layout = useMemo(() => layoutTree(data, index), [data, index]);
   const [nodes, setNodes, onNodesChange] = useNodesState<TreeNode>(layout.nodes);
@@ -105,7 +107,9 @@ function TreeCanvas({ data, index, reload, onOpen, onHelp, initialSelectedId }: 
     setFileBusy(kind);
     try {
       if (kind === "save") await saveFamilyFileWithDialog();
-      else if (kind === "merge") await mergeFamilyFileWithDialog();
+      else if (kind === "merge") {
+        if (await mergeFamilyFileWithDialog()) onMerge();
+      }
       else await openFamilyFileWithDialog(data.people.length > 0);
     } catch (e) {
       await message(String(e), { title: "Family file", kind: "error" });

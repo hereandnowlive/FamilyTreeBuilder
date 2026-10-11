@@ -65,10 +65,7 @@ export function MergePage({ onDone }: Props) {
     try {
       setResult({ overridesDir: await applyMerge(plan, choices, timeStamp()) });
     } catch (e) {
-      setError(
-        `The merge stopped partway: ${e}. A copy of your tree from before the merge is in the backups folder ` +
-          "(see Help, under “Where your information is kept”).",
-      );
+      setError(`The merge could not be done, and your tree has not been changed: ${e}`);
     }
     setBusy(false);
   }

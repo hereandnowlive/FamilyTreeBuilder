@@ -42,7 +42,7 @@ export function AddRelativeDialog({ index, anchor, kind, onClose, onDone }: Prop
     try {
       const personId = mode === "new" ? await createPerson(fields) : existingId;
       if (anchor) {
-        await linkRelative(index, anchor.id, kind, personId, kind === "child" ? coParentId : undefined);
+        await linkRelative(anchor.id, kind, personId, kind === "child" ? coParentId : undefined);
       }
       onDone(personId);
     } catch (e) {

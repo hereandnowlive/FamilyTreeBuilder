@@ -34,7 +34,13 @@ const DB_ENTRY: &str = "familytree.db";
 const MEDIA_PREFIX: &str = "media/";
 
 /// Version of the archive layout itself. Raise it if the entries above change.
-const FORMAT_VERSION: u32 = 1;
+///
+/// Version 2 has the same entries as version 1, and both open the same way.
+/// The number went up because the database inside no longer carries the
+/// bookkeeping table that early versions of the app (the ones built on the
+/// SQL plugin) need to open one, and this makes those versions say "saved by
+/// a newer version" instead of failing oddly.
+const FORMAT_VERSION: u32 = 2;
 
 /// Every SQLite database file starts with these 16 bytes.
 /// The `b"..."` prefix makes a byte string (`&[u8; 16]`) instead of text.

@@ -1,0 +1,9 @@
+{
+  // Type-checks the tests. They run in Node, not in the app's webview, so they
+  // get Node's types, which the app's own code deliberately does not.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"]
+}

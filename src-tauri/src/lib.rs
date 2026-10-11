@@ -1,30 +1,29 @@
 // `mod` pulls in src/family_file.rs as a child module. Unlike a TypeScript import,
 // a Rust file is not part of the program until some `mod` line declares it.
+mod db;
 mod family_file;
+mod merge;
 mod recorder;
 mod thumbnail;
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use db::Row;
 use recorder::Recorder;
+use rusqlite::Connection;
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_sql::{Migration, MigrationKind};
 
-// Must match the string passed to `Database.load` in src/db.ts.
-const DB_URL: &str = "sqlite:familytree.db";
-/// The file that `DB_URL` resolves to inside the app's config folder.
+/// The database file, inside the app's config folder.
 const DB_FILE: &str = "familytree.db";
 
-/// A second database: the tree from a family file that is being merged in.
-/// It gets the same migrations as the main one, so an older file is brought up
-/// to the current schema before the two are compared. Must match
-/// MERGE_DB_URL in src/db.ts.
-const MERGE_DB_URL: &str = "sqlite:merge-incoming.db";
-const MERGE_DB_FILE: &str = "merge-incoming.db";
+/// Where earlier versions of the app kept a copy of the database being merged
+/// in. Nothing writes it any more; `finish_merge` still clears one away.
+const LEGACY_MERGE_DB_FILE: &str = "merge-incoming.db";
 /// Where a family file being merged is unpacked: its photos wait here until
 /// the merge copies across the ones that are new.
 const MERGE_STAGING_DIR: &str = "pending-merge";
@@ -59,6 +58,14 @@ const RECORDING_FILE: &str = "recording-in-progress.mp3";
 /// a lock that lets one thread at a time in, and the only way to change shared data.
 /// https://tauri.app/develop/state-management/
 struct RecorderState(Mutex<Option<Recorder>>);
+
+/// The open database connection, shared by every command.
+///
+/// It starts as `None` and is opened the first time a command needs it (see
+/// [`with_db`]), which is after `apply_pending_open` has had the chance to
+/// swap in a family file. The `Mutex` means one command uses the database at
+/// a time, so two commands can never interleave their statements.
+struct DbState(Mutex<Option<Connection>>);
 
 const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif"];
 /// Formats the webview can play on both Windows and Linux.
@@ -131,52 +138,200 @@ fn remove_database(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Full path of the database file. The SQL plugin resolves `DB_URL` against the
-/// config folder, which on Linux is a different folder from the data folder
-/// (on Windows the two are the same).
+/// Full path of the database file. It is in the config folder, which on Linux
+/// is a different folder from the data folder (on Windows the two are the
+/// same). It has always been there, so it stays there.
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app.path().app_config_dir().map_err(text)?.join(DB_FILE))
 }
 
-/// Every database migration, oldest first.
-/// Never edit a migration that has shipped; add a new one with the next version.
-fn migrations() -> Vec<Migration> {
-    vec![
-        Migration {
-            version: 1,
-            description: "create initial tables",
-            sql: include_str!("../migrations/001_init.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "major events, photo descriptions and audio recordings",
-            sql: include_str!("../migrations/002_events.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "move photos without an event into a Photos event",
-            sql: include_str!("../migrations/003_photos_in_events.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "events can be shared by several people",
-            sql: include_str!("../migrations/004_shared_events.sql"),
-            kind: MigrationKind::Up,
-        },
-    ]
+/// Runs `work` with the database connection, opening the database first if
+/// this is the first use, and turns any error into text for the frontend.
+///
+/// The signature is generic, like `T WithDb<T>(Func<Connection, T> work)` in
+/// C#. `impl FnOnce(...)` accepts any closure that will be called once, and
+/// `E: Display` accepts any error type that can be printed, so functions from
+/// `db.rs` can be passed in whatever kind of error they return.
+/// https://doc.rust-lang.org/book/ch13-01-closures.html
+fn with_db<T, E: Display>(app: &AppHandle, work: impl FnOnce(&mut Connection) -> Result<T, E>) -> Result<T, String> {
+    let state = app.state::<DbState>();
+    // The lock is held until `slot` goes out of scope at the end of the function.
+    let mut slot = state.0.lock().map_err(text)?;
+    if slot.is_none() {
+        *slot = Some(db::open(&db_path(app)?).map_err(text)?);
+    }
+    // `as_mut` borrows the connection inside the `Option` for changing.
+    let conn = slot.as_mut().ok_or("The database is not open.")?;
+    work(conn).map_err(text)
 }
 
-/// The newest migration version this build knows. It is written into every
-/// family file so an older copy of the app can tell it must not open a newer file.
-fn schema_version() -> i64 {
-    // An iterator chain, the counterpart of LINQ's `Select(...).Max()`. `max`
-    // returns an `Option` because the list could be empty; `unwrap_or` supplies
-    // the value to use in that case.
-    migrations().iter().map(|m| m.version).max().unwrap_or(0)
+/// Closes the database connection, if it is open. The next command to use the
+/// database opens it again.
+fn close_db(app: &AppHandle) -> Result<(), String> {
+    // Assigning `None` drops the old connection, and dropping a `Connection`
+    // closes it: Rust runs a value's clean-up when it stops being owned,
+    // like `Dispose` being called for you.
+    // https://doc.rust-lang.org/book/ch15-03-drop.html
+    *app.state::<DbState>().0.lock().map_err(text)? = None;
+    Ok(())
 }
+
+/// Deletes stored photos and recordings from the media folder, with their
+/// thumbnails. Called after the rows that used them have been deleted.
+fn remove_media_files(app: &AppHandle, file_names: &[String]) -> Result<(), String> {
+    for file_name in file_names {
+        require_bare_file_name(file_name)?;
+        family_file::remove_file_if_exists(&media_dir(app)?.join(file_name)).map_err(text)?;
+        // A recording has no thumbnail, which "if exists" covers.
+        family_file::remove_file_if_exists(&thumb_path(app, file_name)?).map_err(text)?;
+    }
+    Ok(())
+}
+
+// ---- tree, people and relationships ----------------------------------------
+//
+// Every database command is `(async)`, which runs it on a background thread.
+// A plain command runs on the main thread, where waiting for the database
+// lock (held by a long merge or save, say) would freeze the window.
+// https://tauri.app/develop/calling-rust/#async-commands
+//
+// Tauri converts argument names for the frontend: `person_id` here is
+// `personId` in the `invoke` call in src/db.ts.
+
+#[tauri::command(async)]
+fn load_tree(app: AppHandle) -> Result<db::Tree, String> {
+    // `|conn| ...` is a closure. `with_db` calls it with the open connection.
+    with_db(&app, |conn| db::load_tree(conn))
+}
+
+#[tauri::command(async)]
+fn create_person(app: AppHandle, fields: db::PersonFields) -> Result<String, String> {
+    with_db(&app, |conn| db::create_person(conn, &fields))
+}
+
+#[tauri::command(async)]
+fn update_person(app: AppHandle, id: String, fields: db::PersonFields) -> Result<(), String> {
+    with_db(&app, |conn| db::update_person(conn, &id, &fields))
+}
+
+#[tauri::command(async)]
+fn delete_person(app: AppHandle, id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::delete_person(conn, &id))?;
+    remove_media_files(&app, &files)
+}
+
+#[tauri::command(async)]
+fn link_relative(
+    app: AppHandle,
+    anchor_id: String,
+    kind: db::Relation,
+    relative_id: String,
+    co_parent_id: Option<String>,
+) -> Result<(), String> {
+    // `as_deref` turns `Option<String>` into `Option<&str>`: a borrowed view
+    // of the text instead of the owned string.
+    with_db(&app, |conn| db::link_relative(conn, &anchor_id, kind, &relative_id, co_parent_id.as_deref()))
+}
+
+#[tauri::command(async)]
+fn remove_partnership(app: AppHandle, a: String, b: String) -> Result<(), String> {
+    with_db(&app, |conn| db::remove_partnership(conn, &a, &b))
+}
+
+#[tauri::command(async)]
+fn remove_parent_link(app: AppHandle, parent_id: String, child_id: String) -> Result<(), String> {
+    with_db(&app, |conn| db::remove_parent_link(conn, &parent_id, &child_id))
+}
+
+// ---- major events ----------------------------------------------------------
+
+#[tauri::command(async)]
+fn list_events(app: AppHandle, person_id: String) -> Result<Vec<Row>, String> {
+    with_db(&app, |conn| db::list_events(conn, &person_id))
+}
+
+#[tauri::command(async)]
+fn list_event_links(app: AppHandle, person_id: String) -> Result<Vec<Row>, String> {
+    with_db(&app, |conn| db::list_event_links(conn, &person_id))
+}
+
+#[tauri::command(async)]
+fn create_event(app: AppHandle, person_id: String) -> Result<String, String> {
+    with_db(&app, |conn| db::create_event(conn, &person_id))
+}
+
+#[tauri::command(async)]
+fn add_event_person(app: AppHandle, event_id: String, person_id: String) -> Result<(), String> {
+    with_db(&app, |conn| db::add_event_person(conn, &event_id, &person_id))
+}
+
+#[tauri::command(async)]
+fn remove_event_person(app: AppHandle, event_id: String, person_id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::remove_event_person(conn, &event_id, &person_id))?;
+    remove_media_files(&app, &files)
+}
+
+#[tauri::command(async)]
+fn update_event(app: AppHandle, id: String, fields: db::EventFields) -> Result<(), String> {
+    with_db(&app, |conn| db::update_event(conn, &id, &fields))
+}
+
+#[tauri::command(async)]
+fn delete_event(app: AppHandle, id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::delete_event(conn, &id))?;
+    remove_media_files(&app, &files)
+}
+
+// ---- photos and recordings -------------------------------------------------
+
+#[tauri::command(async)]
+fn get_media(app: AppHandle, id: String) -> Result<Option<Row>, String> {
+    with_db(&app, |conn| db::get_media(conn, &id))
+}
+
+#[tauri::command(async)]
+fn list_media(app: AppHandle, person_id: String) -> Result<Vec<Row>, String> {
+    with_db(&app, |conn| db::list_media(conn, &person_id))
+}
+
+#[tauri::command(async)]
+fn update_caption(app: AppHandle, media_id: String, caption: String) -> Result<(), String> {
+    with_db(&app, |conn| db::update_caption(conn, &media_id, &caption))
+}
+
+#[tauri::command(async)]
+fn update_description(app: AppHandle, media_id: String, description: String) -> Result<(), String> {
+    with_db(&app, |conn| db::update_description(conn, &media_id, &description))
+}
+
+#[tauri::command(async)]
+fn set_portrait(app: AppHandle, person_id: String, media_id: Option<String>) -> Result<(), String> {
+    with_db(&app, |conn| db::set_portrait(conn, &person_id, media_id.as_deref()))
+}
+
+#[tauri::command(async)]
+fn delete_media(app: AppHandle, id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::delete_media(conn, &id))?;
+    remove_media_files(&app, &files)
+}
+
+#[tauri::command(async)]
+fn list_recordings(app: AppHandle, media_id: String) -> Result<Vec<Row>, String> {
+    with_db(&app, |conn| db::list_recordings(conn, &media_id))
+}
+
+#[tauri::command(async)]
+fn update_recording_title(app: AppHandle, id: String, title: String) -> Result<(), String> {
+    with_db(&app, |conn| db::update_recording_title(conn, &id, &title))
+}
+
+#[tauri::command(async)]
+fn delete_recording(app: AppHandle, id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::delete_recording(conn, &id))?;
+    remove_media_files(&app, &files)
+}
+
+// ---- media files -----------------------------------------------------------
 
 #[tauri::command]
 fn get_media_dir(app: AppHandle) -> Result<String, String> {
@@ -207,25 +362,38 @@ fn import_file(app: &AppHandle, source: &str, allowed: &[&str], rejection: &str)
     Ok(file_name)
 }
 
-/// Copies an image into the media folder and returns the new file name.
-#[tauri::command]
-fn import_photo(app: AppHandle, source: String) -> Result<String, String> {
-    import_file(&app, &source, &IMAGE_EXTENSIONS, "Not a supported image file")
+/// Copies an image into the media folder and adds it to the event as a photo.
+/// Returns the new photo's id.
+#[tauri::command(async)]
+fn import_photo(app: AppHandle, person_id: String, source: String, event_id: String) -> Result<String, String> {
+    let file_name = import_file(&app, &source, &IMAGE_EXTENSIONS, "Not a supported image file")?;
+    let result = with_db(&app, |conn| db::add_media(conn, &person_id, &event_id, &file_name));
+    if result.is_err() {
+        // No row points at the copy, so do not leave it behind.
+        let _ = remove_media_files(&app, &[file_name]);
+    }
+    result
 }
 
-/// Copies an audio recording into the media folder and returns the new file name.
-#[tauri::command]
-fn import_audio(app: AppHandle, source: String) -> Result<String, String> {
-    import_file(&app, &source, &AUDIO_EXTENSIONS, "Not a supported audio file")
+/// Copies an audio file into the media folder and attaches it to the photo.
+#[tauri::command(async)]
+fn import_recording(app: AppHandle, media_id: String, source: String, title: String) -> Result<(), String> {
+    let file_name = import_file(&app, &source, &AUDIO_EXTENSIONS, "Not a supported audio file")?;
+    attach_recording(&app, &media_id, file_name, &title)
 }
 
-/// Deletes one stored photo or recording from the media folder.
-#[tauri::command]
-fn delete_media_file(app: AppHandle, file_name: String) -> Result<(), String> {
-    require_bare_file_name(&file_name)?;
-    family_file::remove_file_if_exists(&media_dir(&app)?.join(&file_name)).map_err(text)?;
-    // A recording has no thumbnail, which "if exists" covers.
-    family_file::remove_file_if_exists(&thumb_path(&app, &file_name)?).map_err(text)
+/// Records a file already in the media folder as a recording on the photo, or
+/// deletes the file if that fails.
+///
+/// `file_name` is taken by value (`String`, not `&str`): this function becomes
+/// its owner, which is what lets it hand the name on to be deleted.
+/// https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html
+fn attach_recording(app: &AppHandle, media_id: &str, file_name: String, title: &str) -> Result<(), String> {
+    let result = with_db(app, |conn| db::add_recording(conn, media_id, &file_name, title));
+    if result.is_err() {
+        let _ = remove_media_files(app, &[file_name]);
+    }
+    result
 }
 
 #[tauri::command]
@@ -277,8 +445,7 @@ fn recording_level(state: State<RecorderState>) -> f32 {
 
 /// Stops the recording in progress. With `keep`, moves the finished MP3 into
 /// the media folder and returns its file name; otherwise discards it.
-#[tauri::command(async)]
-fn stop_recording(app: AppHandle, state: State<RecorderState>, keep: bool) -> Result<Option<String>, String> {
+fn stop_recording(app: &AppHandle, state: &State<RecorderState>, keep: bool) -> Result<Option<String>, String> {
     // `take` moves the recorder out of the slot and leaves `None` behind. The
     // lock guard is a temporary here, so it is released at the end of this
     // statement and the mutex is not held while the file is being finished.
@@ -289,7 +456,7 @@ fn stop_recording(app: AppHandle, state: State<RecorderState>, keep: bool) -> Re
         .take()
         .ok_or("No recording is in progress.")?;
 
-    let temp = data_dir(&app)?.join(RECORDING_FILE);
+    let temp = data_dir(app)?.join(RECORDING_FILE);
     let result = recorder.finish();
     if !keep || result.is_err() {
         let _ = fs::remove_file(&temp);
@@ -298,41 +465,47 @@ fn stop_recording(app: AppHandle, state: State<RecorderState>, keep: bool) -> Re
     }
 
     let file_name = format!("{}.mp3", uuid::Uuid::new_v4());
-    fs::rename(&temp, media_dir(&app)?.join(&file_name)).map_err(text)?;
+    fs::rename(&temp, media_dir(app)?.join(&file_name)).map_err(text)?;
     Ok(Some(file_name))
 }
 
-/// Step 1 of saving a family file: returns the path the frontend should write
-/// a database snapshot to, using `VACUUM INTO`.
-///
-/// The snapshot is taken through the SQL plugin because it owns the open
-/// database connection. `VACUUM INTO` gives a complete, consistent copy even
-/// while the app is in use, which copying the live file would not guarantee.
-#[tauri::command]
-fn prepare_snapshot(app: AppHandle) -> Result<String, String> {
-    let path = data_dir(&app)?.join(SNAPSHOT_FILE);
-    // `VACUUM INTO` refuses to overwrite, so clear any snapshot left by a failed save.
-    family_file::remove_file_if_exists(&path).map_err(text)?;
-    Ok(path.to_string_lossy().into_owned())
+/// Stops the recording in progress and attaches it to the photo.
+#[tauri::command(async)]
+fn save_recording(app: AppHandle, state: State<RecorderState>, media_id: String, title: String) -> Result<(), String> {
+    match stop_recording(&app, &state, true)? {
+        Some(file_name) => attach_recording(&app, &media_id, file_name, &title),
+        None => Ok(()),
+    }
 }
 
-/// Packs the snapshot from [`prepare_snapshot`] and the media folder into a
-/// family file at `dest`, then deletes the snapshot.
-fn pack_snapshot(app: &AppHandle, dest: &Path) -> Result<(), String> {
+/// Stops the recording in progress and throws it away.
+#[tauri::command(async)]
+fn discard_recording(app: AppHandle, state: State<RecorderState>) -> Result<(), String> {
+    // `map(|_| ())` keeps success or failure and drops the value inside.
+    stop_recording(&app, &state, false).map(|_| ())
+}
+
+/// Packs the whole tree, photos included, into a family file at `dest`.
+///
+/// The database is copied first, to a temporary snapshot file, so the archive
+/// holds one consistent moment even if the app is being used while it is
+/// written. The database lock is only held for that copy, not while the
+/// photos are zipped.
+fn pack_tree(app: &AppHandle, dest: &Path) -> Result<(), String> {
     let snapshot = data_dir(app)?.join(SNAPSHOT_FILE);
-    let result = family_file::pack(&snapshot, &media_dir(app)?, dest, schema_version());
+    // `VACUUM INTO` refuses to overwrite, so clear any snapshot left by a failed save.
+    family_file::remove_file_if_exists(&snapshot).map_err(text)?;
+    with_db(app, |conn| db::snapshot_into(conn, &snapshot))?;
+
+    let result = family_file::pack(&snapshot, &media_dir(app)?, dest, db::schema_version());
     let _ = fs::remove_file(&snapshot);
     result.map_err(text)
 }
 
-/// Step 2 of saving a family file: writes it to the path the user chose.
-///
-/// `(async)` runs the command on a background thread. A plain command runs on
-/// the main thread, where copying many photos would freeze the window.
-/// https://tauri.app/develop/calling-rust/#async-commands
+/// Saves the whole tree as one family file at the path the user chose.
 #[tauri::command(async)]
 fn write_family_file(app: AppHandle, dest: String) -> Result<(), String> {
-    pack_snapshot(&app, Path::new(&dest))
+    pack_tree(&app, Path::new(&dest))
 }
 
 /// Name of the automatic backup taken before `reason` ("open" or "merge").
@@ -345,15 +518,19 @@ fn backup_name(reason: &str, stamp: &str) -> String {
     )
 }
 
-/// Like [`write_family_file`], but saves into the app's own backups folder and
-/// keeps only the most recent few. Called before a family file replaces the
-/// tree or is merged into it.
-#[tauri::command(async)]
-fn write_backup(app: AppHandle, reason: String, stamp: String) -> Result<(), String> {
-    let dir = data_dir(&app)?.join(BACKUPS_DIR);
+/// Saves the tree into the app's own backups folder and keeps only the most
+/// recent few.
+fn backup(app: &AppHandle, reason: &str, stamp: &str) -> Result<(), String> {
+    let dir = data_dir(app)?.join(BACKUPS_DIR);
     fs::create_dir_all(&dir).map_err(text)?;
-    pack_snapshot(&app, &dir.join(backup_name(&reason, &stamp)))?;
+    pack_tree(app, &dir.join(backup_name(reason, stamp)))?;
     family_file::prune_backups(&dir, BACKUPS_KEPT).map_err(text)
+}
+
+/// Backs up the tree before a family file replaces it.
+#[tauri::command(async)]
+fn write_backup(app: AppHandle, stamp: String) -> Result<(), String> {
+    backup(&app, "open", &stamp)
 }
 
 /// Checks the family file at `path` and unpacks it into the staging folder.
@@ -361,27 +538,27 @@ fn write_backup(app: AppHandle, reason: String, stamp: String) -> Result<(), Str
 #[tauri::command(async)]
 fn stage_family_file(app: AppHandle, path: String) -> Result<(), String> {
     let staging = data_dir(&app)?.join(STAGING_DIR);
-    family_file::stage(Path::new(&path), &staging, schema_version()).map_err(text)
+    family_file::stage(Path::new(&path), &staging, db::schema_version()).map_err(text)
 }
 
 /// Checks the family file at `path` and unpacks it ready to be merged into the
 /// current tree. Nothing in the current tree changes.
 ///
-/// Its database goes beside the main one as a second database, and its photos
-/// stay in the staging folder until the merge decides which of them are new.
+/// Its database and photos stay in the staging folder: the database is read
+/// from there for comparison, and the merge copies across the photos that are new.
 #[tauri::command(async)]
 fn stage_merge(app: AppHandle, path: String) -> Result<(), String> {
     let staging = data_dir(&app)?.join(MERGE_STAGING_DIR);
-    family_file::stage(Path::new(&path), &staging, schema_version()).map_err(text)?;
-
-    let merge_db = db_path(&app)?.with_file_name(MERGE_DB_FILE);
-    remove_database(&merge_db)?;
-    fs::copy(staging.join(DB_FILE), &merge_db).map_err(text)?;
-    fs::write(staging.join(MERGE_SOURCE_FILE), &path).map_err(text)
+    family_file::stage(Path::new(&path), &staging, db::schema_version()).map_err(text)?;
+    fs::write(staging.join(MERGE_SOURCE_FILE), &path).map_err(text)?;
+    // Marked last, once everything is in place. The marker is what makes the
+    // merge screen come back if the app is closed before the merge is decided.
+    family_file::mark_ready(&staging).map_err(text)
 }
 
-/// Whether a family file is waiting to be merged. The frontend asks at
-/// startup and shows the merge screen instead of the tree if so.
+/// Whether a family file is waiting to be merged, left from the last time the
+/// app was open. The frontend asks at startup and shows the merge screen
+/// instead of the tree if so.
 #[tauri::command]
 fn pending_merge(app: AppHandle) -> Result<bool, String> {
     if family_file::is_ready(&data_dir(&app)?.join(MERGE_STAGING_DIR)) {
@@ -392,13 +569,30 @@ fn pending_merge(app: AppHandle) -> Result<bool, String> {
     Ok(false)
 }
 
-/// Copies the named photos and recordings from the file being merged into the
-/// media folder. Fails before copying anything if one is missing, so the tree
-/// never ends up pointing at a file that is not there.
+/// Both trees in full, for the frontend to compare: the current one and the
+/// one in the file being merged.
+///
+/// The `json!` macro at the end builds the `{ mine, theirs }` object the
+/// frontend receives, without declaring a struct for a shape used once.
 #[tauri::command(async)]
-fn merge_import_files(app: AppHandle, file_names: Vec<String>) -> Result<(), String> {
-    let source = data_dir(&app)?.join(MERGE_STAGING_DIR).join("media");
-    let dest = media_dir(&app)?;
+fn merge_snapshots(app: AppHandle) -> Result<serde_json::Value, String> {
+    // Opening the file's database also brings it up to the current schema if
+    // it is from an older version. It is a staged copy, so changing it is fine.
+    let incoming = db::open(&data_dir(&app)?.join(MERGE_STAGING_DIR).join(DB_FILE)).map_err(text)?;
+    let theirs = merge::snapshot(&incoming).map_err(text)?;
+    let mine = with_db(&app, |conn| merge::snapshot(conn))?;
+    // `incoming` is closed when it goes out of scope here, which lets
+    // `finish_merge` delete the file afterwards (Windows will not delete an open file).
+    Ok(serde_json::json!({ "mine": mine, "theirs": theirs }))
+}
+
+/// Copies the named photos and recordings from the file being merged into the
+/// media folder, and returns the ones that were not already there. Fails
+/// before copying anything if one is missing, so the tree never ends up
+/// pointing at a file that is not there.
+fn merge_import_files(app: &AppHandle, file_names: &[String]) -> Result<Vec<String>, String> {
+    let source = data_dir(app)?.join(MERGE_STAGING_DIR).join("media");
+    let dest = media_dir(app)?;
 
     // `iter()` borrows each name; `try_for_each` stops at the first `Err`,
     // which `?` then returns from this function.
@@ -407,14 +601,16 @@ fn merge_import_files(app: AppHandle, file_names: Vec<String>) -> Result<(), Str
         return Err(format!("The file being merged is incomplete: {missing} is missing from it."));
     }
 
-    for name in &file_names {
+    let mut copied = Vec::new();
+    for name in file_names {
         // File names are random and unique, so one that already exists here
         // is the same file.
         if !dest.join(name).exists() {
             fs::copy(source.join(name), dest.join(name)).map_err(text)?;
+            copied.push(name.clone());
         }
     }
-    Ok(())
+    Ok(copied)
 }
 
 /// Keeps a copy of each tree that was overridden while settling merge
@@ -422,14 +618,13 @@ fn merge_import_files(app: AppHandle, file_names: Vec<String>) -> Result<(), Str
 ///
 /// `mine` keeps the tree as it was before the merge (already saved as a backup
 /// under the same `stamp`); `theirs` keeps the family file that was merged in.
-#[tauri::command(async)]
-fn save_overrides(app: AppHandle, stamp: String, mine: bool, theirs: bool) -> Result<String, String> {
-    let data = data_dir(&app)?;
-    let dir = data.join(OVERRIDES_DIR).join(safe_name_part(&stamp));
+fn save_overrides(app: &AppHandle, stamp: &str, mine: bool, theirs: bool) -> Result<String, String> {
+    let data = data_dir(app)?;
+    let dir = data.join(OVERRIDES_DIR).join(safe_name_part(stamp));
     fs::create_dir_all(&dir).map_err(text)?;
 
     if mine {
-        let backup = data.join(BACKUPS_DIR).join(backup_name("merge", &stamp));
+        let backup = data.join(BACKUPS_DIR).join(backup_name("merge", stamp));
         let dest = dir.join(format!("my tree before the merge.{}", family_file::EXTENSION));
         fs::copy(backup, dest).map_err(text)?;
     }
@@ -441,15 +636,53 @@ fn save_overrides(app: AppHandle, stamp: String, mine: bool, theirs: bool) -> Re
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// Carries out a merge plan. `choices` holds the user's decision for every
+/// conflict, by its key.
+///
+/// A backup of the current tree is always taken first. If any conflict was
+/// settled, a copy of each tree that lost out is also kept in the overrides
+/// folder, whose path is returned (`None`, which arrives as `null`, if there
+/// were no conflicts).
+///
+/// The database changes are one transaction, so if anything fails the tree is
+/// exactly as it was before.
+#[tauri::command(async)]
+fn apply_merge(
+    app: AppHandle,
+    plan: merge::Plan,
+    choices: HashMap<String, merge::Choice>,
+    stamp: String,
+) -> Result<Option<String>, String> {
+    backup(&app, "merge", &stamp)?;
+
+    // `values()` walks the choices; `any` is LINQ's `Any`.
+    let overrides_dir = if choices.is_empty() {
+        None
+    } else {
+        // Whichever side was not chosen somewhere is the one that lost there.
+        let mine_lost = choices.values().any(|choice| *choice == merge::Choice::Theirs);
+        let theirs_lost = choices.values().any(|choice| *choice == merge::Choice::Mine);
+        Some(save_overrides(&app, &stamp, mine_lost, theirs_lost)?)
+    };
+
+    let copied = merge_import_files(&app, &plan.files)?;
+    let result = with_db(&app, |conn| merge::apply(conn, &plan, &choices));
+    if result.is_err() {
+        // The rows were rolled back, so take the photos back out as well.
+        let _ = remove_media_files(&app, &copied);
+    }
+    result?;
+    Ok(overrides_dir)
+}
+
 /// Clears away the file being merged, after the merge is done or cancelled.
-/// The frontend must close its connection to the merge database first.
 #[tauri::command]
 fn finish_merge(app: AppHandle) -> Result<(), String> {
     let staging = data_dir(&app)?.join(MERGE_STAGING_DIR);
     if staging.exists() {
         fs::remove_dir_all(&staging).map_err(text)?;
     }
-    remove_database(&db_path(&app)?.with_file_name(MERGE_DB_FILE))
+    remove_database(&db_path(&app)?.with_file_name(LEGACY_MERGE_DB_FILE))
 }
 
 /// Saves a copy of a stored photo or recording to a place the user chose.
@@ -460,17 +693,18 @@ fn export_media_file(app: AppHandle, file_name: String, dest: String) -> Result<
     Ok(())
 }
 
-/// Confirms a staged family file and restarts the app to act on it: with
-/// `merge` the one staged by [`stage_merge`], otherwise the one staged by
-/// [`stage_family_file`].
+/// Confirms the family file staged by [`stage_family_file`] and restarts the
+/// app to swap it in.
 ///
-/// Both wait for a restart for two reasons: the SQL plugin only runs
-/// migrations the first time a database is opened in a process, and Windows
-/// will not let a file be replaced while something still has it open.
+/// Opening a file waits for a restart because the database and media folder
+/// are swapped at startup, before anything has them open (Windows will not
+/// let an open file be replaced). A merge needs no restart: it only adds to
+/// the tree that is already open.
 #[tauri::command]
-fn restart_into_staged(app: AppHandle, merge: bool) -> Result<(), String> {
-    let staging = if merge { MERGE_STAGING_DIR } else { STAGING_DIR };
-    family_file::mark_ready(&data_dir(&app)?.join(staging)).map_err(text)?;
+fn restart_into_staged(app: AppHandle) -> Result<(), String> {
+    family_file::mark_ready(&data_dir(&app)?.join(STAGING_DIR)).map_err(text)?;
+    // Closed properly first, so SQLite folds its "-wal" file into the database.
+    close_db(&app)?;
     if tauri::is_dev() {
         // Under `tauri dev` a relaunched app would outlive the Vite dev server
         // and show a blank window, so just exit. The staged file is applied
@@ -501,35 +735,51 @@ fn apply_pending_open(app: AppHandle) -> Result<bool, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations(DB_URL, migrations())
-                .add_migrations(MERGE_DB_URL, migrations())
-                .build(),
-        )
         .manage(RecorderState(Mutex::new(None)))
+        .manage(DbState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
+            load_tree,
+            create_person,
+            update_person,
+            delete_person,
+            link_relative,
+            remove_partnership,
+            remove_parent_link,
+            list_events,
+            list_event_links,
+            create_event,
+            add_event_person,
+            remove_event_person,
+            update_event,
+            delete_event,
+            get_media,
+            list_media,
+            update_caption,
+            update_description,
+            set_portrait,
+            delete_media,
+            list_recordings,
+            update_recording_title,
+            delete_recording,
             get_media_dir,
             import_photo,
-            import_audio,
-            delete_media_file,
+            import_recording,
             get_thumbs_dir,
             ensure_thumbnail,
             start_recording,
             recording_level,
-            stop_recording,
-            prepare_snapshot,
+            save_recording,
+            discard_recording,
             write_family_file,
             write_backup,
             stage_family_file,
             restart_into_staged,
             stage_merge,
             pending_merge,
-            merge_import_files,
-            save_overrides,
+            merge_snapshots,
+            apply_merge,
             finish_merge,
             export_media_file,
             apply_pending_open

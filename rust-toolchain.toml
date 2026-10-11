@@ -1,0 +1,10 @@
+# Pins the Rust compiler this project is built with, so a build years from now
+# uses the same compiler as today instead of whatever is newest. rustup reads
+# this file from the project folder (and any folder inside it) and downloads
+# this version on first use.
+# https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file
+#
+# To move to a newer Rust: change the number here and in
+# .github/workflows/release.yml, then run `cargo test` in src-tauri.
+[toolchain]
+channel = "1.99.0"

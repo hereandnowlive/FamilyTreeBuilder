@@ -118,7 +118,9 @@ jobs:
           node-version: 24
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The same Rust version as rust-toolchain.toml, which is what Cargo
+      # actually builds with. Change the two together.
+      - uses: dtolnay/rust-toolchain@1.99.0
 
       # Keeps compiled dependencies between runs, so later releases build in a
       # few minutes instead of starting from nothing.
