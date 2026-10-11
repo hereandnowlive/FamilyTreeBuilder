@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Avatar } from "../components/Avatar";
 import { PersonChip } from "../components/PersonChip";
-import { Button, Card, Field, TopBar, inputClass } from "../components/ui";
+import { Button, Card, CollapsibleCard, Field, TopBar, inputClass } from "../components/ui";
 import {
   addEventPerson,
   createEvent,
@@ -28,6 +28,10 @@ import { EventsCard } from "./EventsCard";
 // How far down the page, in pixels, before the "Back to top" button appears.
 const BACK_TO_TOP_AFTER = 600;
 
+// Whether "Their story" is expanded. Kept outside the component, like the open events in
+// EventsCard, so it stays as the user left it while they move between people and photos.
+let storyExpanded = false;
+
 // Where the page was scrolled to when a photo was opened, so coming back lands on the same spot.
 let savedScroll: { personId: string; top: number } | null = null;
 
@@ -47,6 +51,7 @@ function fieldsOf(person: Person): PersonFields {
 
 export function PersonPage({ person, index, reload, onBack, onNavigate, onOpenPhoto }: Props) {
   const [draft, setDraft] = useState(() => fieldsOf(person));
+  const [storyOpen, setStoryOpen] = useState(storyExpanded);
   const [events, setEvents] = useState<LifeEvent[]>([]);
   const [eventLinks, setEventLinks] = useState<EventLink[]>([]);
   const [photos, setPhotos] = useState<Media[]>([]);
@@ -341,13 +346,22 @@ export function PersonPage({ person, index, reload, onBack, onNavigate, onOpenPh
             </Card>
           )}
 
-          <Card title="Their story">
+          <CollapsibleCard
+            title="Their story"
+            expanded={storyOpen}
+            onToggle={() => {
+              storyExpanded = !storyOpen;
+              setStoryOpen(storyExpanded);
+            }}
+            // Collapsed, the card shows how the story begins.
+            summary={draft.biography.trim().replace(/\s+/g, " ") || "Nothing written yet"}
+          >
             <textarea
               className={`${inputClass} resize-y font-serif text-base leading-[1.6]`}
               rows={12}
               {...text("biography", "Write about their life: where they lived, what they did, the stories passed down…")}
             />
-          </Card>
+          </CollapsibleCard>
 
           <EventsCard
             events={events}

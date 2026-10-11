@@ -76,7 +76,7 @@ Open a person from the tree to see their page. **← Tree** at the top left take
 
 - **Details** holds names, sex, and when and where they were born and died. Dates are free text, so you can write whatever you know: `12 Mar 1902`, `Mar 1902`, `abt. 1850`.
 - **Family** lists their parents, partners, siblings and children. Click a name to go to that person. The **×** beside a name removes the link between the two people. Both people stay in the tree.
-- **Their story** is for writing about their life at any length.
+- **Their story** is for writing about their life at any length. Click its title to open it; closed, it shows how the story begins. It stays open or closed as you left it while you move between people.
 - **Major events** is described in the next section.
 
 When you have scrolled a long way down, a **↑ Back to top** button appears at the bottom right.
@@ -94,6 +94,8 @@ Major events are the moments that shaped a life: a wedding, a move to another co
 3. Write as much as you like about it in the box underneath.
 
 Events are shown in order of the year in their date. Events with no year come last.
+
+Each event is a row showing its title, date, and how many photos and people it has. Click a row to open it and see or change everything in it; click the arrow beside its title to close it again. **Expand all** and **Collapse all** at the top of the list open or close every event at once. The app remembers which events you had open until you close it.
 
 ### Adding photos
 

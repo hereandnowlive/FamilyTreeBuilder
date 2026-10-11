@@ -72,3 +72,35 @@ export function Card({ title, action, children }: { title: string; action?: Reac
     </section>
   );
 }
+
+/**
+ * A Card whose title is a button that shows or hides the contents. While hidden, `summary` is
+ * shown beside the title so the card still says what is inside it.
+ */
+export function CollapsibleCard(props: {
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+  summary?: string;
+  children: ReactNode;
+}) {
+  const { title, expanded, onToggle, summary, children } = props;
+  return (
+    <section className="rounded-[10px] border border-line bg-surface px-5 py-4.5">
+      <button
+        className="-mx-2 -my-1 flex w-[calc(100%+1rem)] cursor-pointer items-baseline gap-2 rounded-md px-2 py-1 text-left hover:bg-paper focus:outline-2 focus:outline-accent/45"
+        aria-expanded={expanded}
+        title={expanded ? "Hide this section" : "Show this section"}
+        onClick={onToggle}
+      >
+        {/* The arrow turns to point down when the card is open. */}
+        <span className={`inline-block w-4 flex-none text-center text-muted transition-transform ${expanded ? "rotate-90" : ""}`}>
+          ▸
+        </span>
+        <h2 className="flex-none font-serif text-[17px] font-semibold">{title}</h2>
+        {!expanded && summary && <span className="min-w-0 flex-1 truncate text-muted">{summary}</span>}
+      </button>
+      {expanded && <div className="mt-3">{children}</div>}
+    </section>
+  );
+}
