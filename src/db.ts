@@ -490,7 +490,8 @@ export async function loadMergeSnapshots(): Promise<{ mine: Snapshot; theirs: Sn
     return { mine: await readSnapshot(await db()), theirs: await readSnapshot(incoming) };
   } finally {
     // Closed straight away so the file can be deleted when the merge finishes.
-    await incoming.close();
+    // The path is needed: close() with no argument closes every database, the tree's own included.
+    await incoming.close(incoming.path);
   }
 }
 
