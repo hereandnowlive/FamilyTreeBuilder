@@ -13,6 +13,7 @@ import { buildPlan, isEmptyPlan, type Row, type Snapshot } from "../src/merge/pl
 function snapshot(tables: Partial<Snapshot> = {}): Snapshot {
   return {
     person: [],
+    document: [],
     event: [],
     event_participant: [],
     media: [],
@@ -67,6 +68,29 @@ test("records only in the file are added, with their files", () => {
   assert.deepEqual(plan.inserts.audio.map((row) => row.id), ["r1"]);
   assert.deepEqual(plan.files, ["photo.jpg", "voice.mp3"]);
   assert.equal(isEmptyPlan(plan), false);
+});
+
+test("a document only in the file is added with its file, and a renamed one is a conflict", () => {
+  const mine = snapshot({
+    person: [person("a")],
+    document: [{ id: "d1", person_id: "a", file_name: "will.pdf", title: "Will" }],
+  });
+  const theirs = snapshot({
+    person: [person("a")],
+    document: [
+      { id: "d1", person_id: "a", file_name: "will.pdf", title: "Last will" },
+      { id: "d2", person_id: "a", file_name: "letter.docx", title: "Letter" },
+    ],
+  });
+
+  const plan = buildPlan(mine, theirs);
+
+  assert.deepEqual(plan.inserts.document.map((row) => row.id), ["d2"]);
+  assert.deepEqual(plan.files, ["letter.docx"]);
+  assert.equal(plan.conflicts.length, 1);
+  assert.equal(plan.conflicts[0].kind, "Document");
+  assert.equal(plan.conflicts[0].title, "Will, of a");
+  assert.deepEqual(plan.conflicts[0].theirs, { title: "Last will" });
 });
 
 test("records only in the current tree are kept: a merge never deletes", () => {

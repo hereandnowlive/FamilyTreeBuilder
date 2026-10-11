@@ -15,6 +15,7 @@ export type Row = Record<string, string | number | null>;
 /** Every row of every table, by table name. */
 export interface Snapshot {
   person: Row[];
+  document: Row[];
   event: Row[];
   event_participant: Row[];
   media: Row[];
@@ -26,6 +27,7 @@ export interface Snapshot {
 /** Tables in an order that satisfies their foreign keys when rows are inserted. Must match TABLES in src-tauri/src/merge.rs. */
 export const INSERT_ORDER = [
   "person",
+  "document",
   "event",
   "event_participant",
   "media",
@@ -34,7 +36,7 @@ export const INSERT_ORDER = [
   "parent_child",
 ] as const satisfies readonly (keyof Snapshot)[];
 
-type RecordTable = "person" | "event" | "media" | "audio";
+type RecordTable = "person" | "document" | "event" | "media" | "audio";
 
 interface Field {
   column: string;
@@ -56,6 +58,7 @@ const FIELDS: Record<RecordTable, Field[]> = {
     { column: "biography", label: "Their story" },
     { column: "portrait_media_id", label: "Portrait" },
   ],
+  document: [{ column: "title", label: "Document name" }],
   event: [
     { column: "title", label: "What happened" },
     { column: "event_date", label: "When" },
@@ -115,7 +118,7 @@ export interface MergePlan {
   fills: Update[];
   conflicts: RecordConflict[];
   parentConflicts: ParentConflict[];
-  /** Photo and recording files to copy in for the inserted rows. */
+  /** Photo, recording and document files to copy in for the inserted rows. */
   files: string[];
   /** Names of people being added who share a name with someone already in the tree. */
   possibleDuplicates: string[];
@@ -140,7 +143,7 @@ function shown(field: Field, value: Row[string], side: Choice): string {
 
 export function buildPlan(mine: Snapshot, theirs: Snapshot): MergePlan {
   const plan: MergePlan = {
-    inserts: { person: [], event: [], event_participant: [], media: [], audio: [], partnership: [], parent_child: [] },
+    inserts: { person: [], document: [], event: [], event_participant: [], media: [], audio: [], partnership: [], parent_child: [] },
     fills: [],
     conflicts: [],
     parentConflicts: [],
@@ -157,6 +160,10 @@ export function buildPlan(mine: Snapshot, theirs: Snapshot): MergePlan {
 
   const describe: Record<RecordTable, (row: Row) => { kind: string; title: string }> = {
     person: (row) => ({ kind: "Person", title: personName(row) }),
+    document: (row) => ({
+      kind: "Document",
+      title: `${text(row.title).trim() || "Untitled document"}, of ${personName(people.get(text(row.person_id)))}`,
+    }),
     event: (row) => ({ kind: "Event", title: eventTitle(row.id) }),
     media: (row) => ({
       kind: "Photo",
@@ -171,15 +178,15 @@ export function buildPlan(mine: Snapshot, theirs: Snapshot): MergePlan {
     },
   };
 
-  // ---- records: people, events, photos, recordings ----
-  for (const table of ["person", "event", "media", "audio"] as const) {
+  // ---- records: people, documents, events, photos, recordings ----
+  for (const table of ["person", "document", "event", "media", "audio"] as const) {
     const existing = byId(mine[table]);
     for (const their of theirs[table]) {
       const id = text(their.id);
       const own = existing.get(id);
       if (!own) {
         plan.inserts[table].push(their);
-        if (table === "media" || table === "audio") plan.files.push(text(their.file_name));
+        if (table !== "person" && table !== "event") plan.files.push(text(their.file_name));
         continue;
       }
 

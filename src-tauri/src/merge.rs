@@ -18,8 +18,9 @@ use crate::family_file::AnyResult;
 
 /// Every table, in an order that satisfies their foreign keys when rows are
 /// inserted. Must match INSERT_ORDER in src/merge/plan.ts.
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "person",
+    "document",
     "event",
     "event_participant",
     "media",
@@ -29,7 +30,7 @@ const TABLES: [&str; 7] = [
 ];
 
 /// The tables whose rows have an `id` column and fields a user can edit.
-const RECORD_TABLES: [&str; 4] = ["person", "event", "media", "audio"];
+const RECORD_TABLES: [&str; 5] = ["person", "document", "event", "media", "audio"];
 
 /// Every row of every table, by table name (`Snapshot` in plan.ts).
 ///

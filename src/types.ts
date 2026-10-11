@@ -70,6 +70,18 @@ export interface Recording {
   title: string;
 }
 
+/**
+ * A file attached to a person, such as a PDF or a Word document (the `document` table).
+ * Named PersonDocument because Document is the DOM type.
+ */
+export interface PersonDocument {
+  id: string;
+  person_id: string;
+  file_name: string;
+  /** The name shown in the app. Starts as the original file's name. */
+  title: string;
+}
+
 export interface TreeData {
   people: Person[];
   partnerships: Partnership[];

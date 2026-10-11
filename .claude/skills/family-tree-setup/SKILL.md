@@ -53,6 +53,7 @@ Only needed to rebuild from nothing.
    - `cargo add tauri@2 --features protocol-asset`
    - `cargo add zip --no-default-features --features deflate`
    - `cargo add image --no-default-features --features jpeg,png,gif,webp,bmp`
+   - `cargo add open` (opens attached documents in the system's default program)
    - `cargo add cpal mp3lame-encoder` (Linux also needs `libasound2-dev`, `make` and `autoconf`)
 5. `src-tauri/tauri.conf.json`: product name and window title "Family Tree Builder" (the display name only: the identifier `com.mitchell.familytree`, the Cargo package and binary name `family-tree`, and the `.familytree` extension keep the original name, and the identifier must never change because the data folders are named after it), 1280x800 window, and the asset protocol enabled with scopes `$APPDATA/media/**` and `$APPDATA/thumbs/**` so the webview can display stored photos and their thumbnails.
 6. `src-tauri/capabilities/default.json` permissions: `core:default`, `dialog:default`.
@@ -90,7 +91,7 @@ Only needed to rebuild from nothing.
 
 ## Data model
 
-Tables: `person`, `partnership`, `parent_child`, `event`, `event_participant`, `media`, `audio`. TypeScript types in `src/types.ts` use the column names unchanged (snake_case).
+Tables: `person`, `partnership`, `parent_child`, `event`, `event_participant`, `media`, `audio`, `document`. TypeScript types in `src/types.ts` use the column names unchanged (snake_case).
 
 - Dates are free text ("abt. 1850"); `yearOf()` pulls out the first four-digit year.
 - `partnership` stores the smaller id in `person_a_id`, so a couple exists once.
@@ -100,6 +101,7 @@ Tables: `person`, `partnership`, `parent_child`, `event`, `event_participant`, `
 - `event.person_id` and `media.person_id` are leftovers that SQLite cannot drop (they carry foreign keys). They do not say whose page something is on, and the TypeScript types leave them out. Each must point at some current participant, because both cascade on delete: `remove_event_person_rows` in `db.rs` moves them to a remaining participant, and `delete_person` goes through it. Never delete a `person` row or an `event_participant` row any other way.
 - Every photo (`media`) belongs to one event through `event_id`, and is listed for a person by joining through `event_participant`, not by `media.person_id`. The column is nullable in the schema but the app always sets it; there is no separate photos section.
 - `audio` rows are recordings attached to a photo. Their files sit in the media folder beside the photos, so family files carry them without extra work. The TypeScript type is `Recording`, and events are `LifeEvent`, because `Audio` and `Event` are DOM names.
+- `document` rows are files attached to a person (PDF, Word and so on), stored in the media folder like photos. The TypeScript type is `PersonDocument`, because `Document` is a DOM name. They are shown by `src/person/DocumentsCard.tsx` at the bottom of the person page.
 - Foreign keys declare cascades, but `db.rs` deletes child rows explicitly, inside a transaction, and returns the file names; the command in `lib.rs` removes the files after the commit. Deleting a person, event or photo must go through `delete_person`, `delete_event` or `delete_media` so no files are left behind.
 
 On Linux the database is at `~/.config/com.mitchell.familytree/familytree.db` and photos are in `~/.local/share/com.mitchell.familytree/media/`. This is Mitchell's real family data: never delete or reset it without asking.
@@ -123,7 +125,8 @@ On Linux the database is at `~/.config/com.mitchell.familytree/familytree.db` an
 - **Styling**: Tailwind's reset strips the browser look from `button`, `input`, `select` and `textarea`, so use `Button` or `inputClass` from `ui.tsx` instead of bare elements. Write class names out in full (no `` `border-l-${x}` ``); Tailwind only generates classes it can find as whole strings, and it only scans `src/`. Rules that target `.react-flow*` classes stay as plain CSS outside any `@layer`, because the library's stylesheet is unlayered and would win otherwise.
 - **Recording** is done natively in Rust, not with the webview's `getUserMedia`/`MediaRecorder`: Tauri's Linux webview has media streams switched off, and the Windows side could not be tested from here. Recording goes to `recording-in-progress.mp3` in the data folder and is moved into the media folder on save. Leaving the photo page mid-recording saves it.
 - **Audio** is played from a blob URL (`AudioPlayer.tsx`), not from `mediaUrl` directly: WebKitGTK on Linux cannot play media from the asset protocol. 
-- **File picker filters** for photos and audio come from `src/fileFilters.ts`, which lists every extension in lower and upper case because Linux pickers match case-sensitively (`IMG0001.JPG` is hidden by a `jpg` filter). Its lists must match `IMAGE_EXTENSIONS` and `AUDIO_EXTENSIONS` in `lib.rs`, which do the real check.
+- **Opening documents**: `open_document` in `lib.rs` hands a stored file to the system's default program with the `open` crate. It takes a document id, never a path, and refuses any extension outside `DOCUMENT_EXTENSIONS`, because a family file from someone else could carry a program or script and opening one would run it. Do not add executable, script or macro-enabled formats to that list.
+- **File picker filters** for photos, audio and documents come from `src/fileFilters.ts`, which lists every extension in lower and upper case because Linux pickers match case-sensitively (`IMG0001.JPG` is hidden by a `jpg` filter). Its lists must match `IMAGE_EXTENSIONS`, `AUDIO_EXTENSIONS` and `DOCUMENT_EXTENSIONS` in `lib.rs`, which do the real check.
 - **A stored photo's file never changes in place.** Thumbnails, the webview's cache and merges all treat a file name as meaning one fixed picture, so anything that alters a photo (as rotation does) writes a new file under a new name and updates `media.file_name`. A merge does not compare `file_name`, so a rotation made in one copy of the tree is not carried into another by merging.
 - **Thumbnails**: anything smaller than a full-page view of a photo must use the `Thumbnail` component or `useThumbnail` hook (`src/components/Thumbnail.tsx`), never `mediaUrl`. Photos are often 20+ megapixel scans, and decoding those for a grid or for tree portraits is what made the UI crawl. Thumbnails are a cache in the `thumbs` folder of the data directory, made on first use by `ensure_thumbnail` (at most 3 at once, limited in `db.ts`), never stored in family files, and cleared when a family file is opened. If a format cannot be decoded (AVIF), the full image is used instead.
 - **Dev build speed**: `Cargo.toml` compiles dependencies at `opt-level = 3` in dev so image decoding is fast under `tauri dev`. The first build after a `cargo clean` is slower because of it.

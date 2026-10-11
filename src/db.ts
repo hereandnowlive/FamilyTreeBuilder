@@ -12,6 +12,7 @@ import type {
   EventLink,
   LifeEvent,
   Media,
+  PersonDocument,
   PersonFields,
   Recording,
   RelationKind,
@@ -224,11 +225,14 @@ export function listRecordings(mediaId: string): Promise<Recording[]> {
   return invoke<Recording[]>("list_recordings", { mediaId });
 }
 
+/** The name of the file at `path`, without its folder or extension. Used as a starting title. */
+function baseName(path: string): string {
+  return (path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "");
+}
+
 /** Copies the audio file at `sourcePath` into the app's media folder and attaches it to the photo. */
 export function importRecording(mediaId: string, sourcePath: string): Promise<void> {
-  // Start the title off as the original file's name, without folder or extension.
-  const title = (sourcePath.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "");
-  return invoke("import_recording", { mediaId, source: sourcePath, title });
+  return invoke("import_recording", { mediaId, source: sourcePath, title: baseName(sourcePath) });
 }
 
 /** Starts recording from the microphone. Fails if there is no microphone or a recording is already running. */
@@ -257,6 +261,32 @@ export function updateRecordingTitle(id: string, title: string): Promise<void> {
 
 export function deleteRecording(recording: Recording): Promise<void> {
   return invoke("delete_recording", { id: recording.id });
+}
+
+// ---- documents -------------------------------------------------------------
+
+/** The files attached to a person, such as PDFs and Word documents. */
+export function listDocuments(personId: string): Promise<PersonDocument[]> {
+  return invoke<PersonDocument[]>("list_documents", { personId });
+}
+
+/** Copies the file at `sourcePath` into the app's media folder and attaches it to the person. */
+export function importDocument(personId: string, sourcePath: string): Promise<void> {
+  return invoke("import_document", { personId, source: sourcePath, title: baseName(sourcePath) });
+}
+
+export function updateDocumentTitle(id: string, title: string): Promise<void> {
+  return invoke("update_document_title", { id, title });
+}
+
+/** Opens the document in the program the computer uses for that kind of file. */
+export function openDocument(document: PersonDocument): Promise<void> {
+  return invoke("open_document", { id: document.id });
+}
+
+/** Removes the document (row and file). */
+export function deleteDocument(document: PersonDocument): Promise<void> {
+  return invoke("delete_document", { id: document.id });
 }
 
 // ---- family files ----------------------------------------------------------

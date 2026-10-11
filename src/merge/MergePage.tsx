@@ -21,6 +21,7 @@ function additions(plan: MergePlan): string[] {
     count(inserts.event.length, "event", "events"),
     count(inserts.media.length, "photo", "photos"),
     count(inserts.audio.length, "recording", "recordings"),
+    count(inserts.document.length, "document", "documents"),
     count(inserts.partnership.length + inserts.parent_child.length, "family link", "family links"),
     count(inserts.event_participant.length, "link between a person and an event", "links between people and events"),
     count(plan.fills.length, "record with blanks filled in", "records with blanks filled in"),

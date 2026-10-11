@@ -35,11 +35,12 @@ use crate::family_file::AnyResult;
 ///
 /// Never edit a migration that has shipped; add a new file to the end of this
 /// list. The position in the list is the version: the first entry is version 1.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     include_str!("../migrations/001_init.sql"),
     include_str!("../migrations/002_events.sql"),
     include_str!("../migrations/003_photos_in_events.sql"),
     include_str!("../migrations/004_shared_events.sql"),
+    include_str!("../migrations/005_documents.sql"),
 ];
 
 /// The most parents one person can have. Must match MAX_PARENTS in src/relations.ts.
@@ -324,6 +325,7 @@ pub fn delete_person(conn: &mut Connection, id: &str) -> rusqlite::Result<Vec<St
     tx.execute("DELETE FROM audio WHERE media_id IN (SELECT id FROM media WHERE person_id = ?1)", [id])?;
     tx.execute("DELETE FROM media WHERE person_id = ?1", [id])?;
     tx.execute("DELETE FROM event WHERE person_id = ?1", [id])?;
+    files.extend(strings(&tx, "DELETE FROM document WHERE person_id = ?1 RETURNING file_name", [id])?);
     tx.execute("DELETE FROM parent_child WHERE parent_id = ?1 OR child_id = ?1", [id])?;
     tx.execute("DELETE FROM partnership WHERE person_a_id = ?1 OR person_b_id = ?1", [id])?;
     tx.execute("DELETE FROM person WHERE id = ?1", [id])?;
@@ -680,6 +682,38 @@ pub fn delete_recording(conn: &Connection, id: &str) -> rusqlite::Result<Vec<Str
     strings(conn, "DELETE FROM audio WHERE id = ?1 RETURNING file_name", [id])
 }
 
+// ---- documents -------------------------------------------------------------
+
+/// The files attached to a person (PDFs, Word documents and the like), oldest first.
+pub fn list_documents(conn: &Connection, person_id: &str) -> rusqlite::Result<Vec<Row>> {
+    query(conn, "SELECT * FROM document WHERE person_id = ?1 ORDER BY created_at, id", [person_id])
+}
+
+/// Attaches a document already copied into the media folder to a person.
+pub fn add_document(conn: &Connection, person_id: &str, file_name: &str, title: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO document (id, person_id, file_name, title) VALUES (?1, ?2, ?3, ?4)",
+        [&new_id(), person_id, file_name, title],
+    )?;
+    Ok(())
+}
+
+/// The file a document is stored in, or `None` if there is no document with that id.
+pub fn document_file(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT file_name FROM document WHERE id = ?1", [id], |row| row.get(0))
+        .optional()
+}
+
+pub fn update_document_title(conn: &Connection, id: &str, title: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE document SET title = ?2 WHERE id = ?1", [id, title])?;
+    Ok(())
+}
+
+/// Removes a document's row and returns its file, if the document existed.
+pub fn delete_document(conn: &Connection, id: &str) -> rusqlite::Result<Vec<String>> {
+    strings(conn, "DELETE FROM document WHERE id = ?1 RETURNING file_name", [id])
+}
+
 /// Unit tests live beside the code they test. `#[cfg(test)]` compiles this
 /// module only for `cargo test`, so none of it ends up in the app.
 /// https://doc.rust-lang.org/book/ch11-01-writing-tests.html
@@ -783,9 +817,14 @@ pub(crate) mod tests {
         add_event_person(&conn, &shared, &ben).unwrap();
         add_media(&conn, &ada, &shared, "shared.jpg").unwrap();
 
+        // A document of Ada's, and one of Ben's that must survive.
+        add_document(&conn, &ada, "will.pdf", "Will").unwrap();
+        add_document(&conn, &ben, "letter.docx", "Letter").unwrap();
+
         let mut files = delete_person(&mut conn, &ada).unwrap();
         files.sort();
-        assert_eq!(files, ["own.jpg", "own.mp3"]);
+        assert_eq!(files, ["own.jpg", "own.mp3", "will.pdf"]);
+        assert_eq!(list_documents(&conn, &ben).unwrap().len(), 1);
 
         // The shared event and its photo now belong to Ben alone.
         assert_eq!(count(&conn, "person"), 1);

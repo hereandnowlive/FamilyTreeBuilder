@@ -78,6 +78,7 @@ Open a person from the tree to see their page. **← Tree** at the top left take
 - **Family** lists their parents, partners, siblings and children. Click a name to go to that person. The **×** beside a name removes the link between the two people. Both people stay in the tree.
 - **Their story** is for writing about their life at any length. Click its title to open it; closed, it shows how the story begins. It stays open or closed as you left it while you move between people.
 - **Major events** is described in the next section.
+- **Documents** holds files that belong with the person, such as PDFs and Word documents. See "Documents" below.
 
 When you have scrolled a long way down, a **↑ Back to top** button appears at the bottom right.
 
@@ -158,6 +159,21 @@ Press **+ Add audio** and choose the file. Supported files: MP3, M4A, AAC, WAV, 
 
 Type in the box above a recording to name it. **Save a copy…** saves it as an ordinary audio file, starting on your Desktop. **Remove** deletes it.
 
+## Documents
+
+A person's page has a **Documents** list at the bottom for files that belong with them: a birth certificate saved as a PDF, a letter typed up in Word, a spreadsheet of census entries.
+
+1. Press **+ Add documents** and choose one or more files. The app copies them, so the originals can be moved or deleted afterwards.
+2. Each document starts with the name of its file. Type in the box to give it a better one.
+
+- **Open** shows the document in the program your computer normally uses for it, such as your PDF viewer or Word. Changes you make there are not something to rely on: to replace a document, remove it and add the new version.
+- **Save a copy…** saves it as an ordinary file, starting on your Desktop.
+- **Remove** deletes the copy stored in the app. It asks first.
+
+These kinds of file can be added: PDF, Word (`.doc`, `.docx`), Excel (`.xls`, `.xlsx`), PowerPoint (`.ppt`, `.pptx`), OpenDocument (`.odt`, `.ods`, `.odp`), rich text (`.rtf`), plain text (`.txt`) and `.csv`. Photos belong in an event instead, where they can be seen.
+
+Documents travel inside the family file with everything else.
+
 ## Sharing the tree with your family
 
 The whole tree, with every photo and recording, travels as one **family file**. Its name ends in `.familytree`.
@@ -190,7 +206,7 @@ Use this when two people have each made changes to their own copy. Merging combi
 
 1. On the tree screen, press **Merge file…** and choose the family file you were sent.
 2. The merge screen appears. Nothing has changed yet.
-3. Read **What the file adds**: the people, events, photos, recordings and family links that are in the file but not in your tree.
+3. Read **What the file adds**: the people, events, photos, recordings, documents and family links that are in the file but not in your tree.
 4. If there is a **Differences to settle** list, choose **Keep mine** or **Use the file's** for each one. See below.
 5. Press **Merge into my tree**. To back out instead, press **Cancel merge** and nothing changes.
 
@@ -230,7 +246,7 @@ These are never deleted automatically. To look something up, save your current t
 Your tree is stored in the app's own folder on your computer, not inside the app itself. Reinstalling or updating the app does not touch it.
 
 - **Windows:** `%APPDATA%\com.mitchell.familytree`. Paste that into the address bar of File Explorer to go there.
-- **Linux:** the tree is in `~/.config/com.mitchell.familytree`, and photos, recordings, backups and overrides are in `~/.local/share/com.mitchell.familytree`.
+- **Linux:** the tree is in `~/.config/com.mitchell.familytree`, and photos, recordings, documents, backups and overrides are in `~/.local/share/com.mitchell.familytree`.
 
 ### Backups
 
@@ -243,6 +259,8 @@ Your tree is stored in the app's own folder on your computer, not inside the app
 **The green bar does not move when I record.** The app uses the microphone your computer has chosen as its default. Open your computer's sound settings, check that the right microphone is selected as the input device and is not muted, then try again.
 
 **"No microphone was found."** Plug in a microphone or headset, or switch on the built-in one in your sound settings.
+
+**A document will not open.** The app hands it to the program your computer uses for that kind of file, so the computer needs one: a PDF viewer for PDFs, Word or LibreOffice for Word files. Use **Save a copy…** to get the file out and open it another way.
 
 **"This recording could not be played on this computer."** The computer cannot play that kind of audio file. MP3 files and recordings made in the app play everywhere.
 

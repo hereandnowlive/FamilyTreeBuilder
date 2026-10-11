@@ -30,6 +30,8 @@ zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 cpal = "0.18.2"
 mp3lame-encoder = "0.2.5"
+# Opens a file in the computer's default program for it (used for attached documents).
+open = "5.4.4"
 
 
 # Compile dependencies with optimisations even in dev builds. Unoptimised image

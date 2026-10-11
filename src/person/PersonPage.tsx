@@ -23,6 +23,7 @@ import {
 import { IMAGE_FILTER } from "../fileFilters";
 import { displayName, lifespan, siblingsOf, type TreeIndex } from "../relations";
 import type { EventLink, LifeEvent, Media, Person, PersonFields, Sex } from "../types";
+import { DocumentsCard } from "./DocumentsCard";
 import { EventsCard } from "./EventsCard";
 
 // How far down the page, in pixels, before the "Back to top" button appears.
@@ -386,6 +387,8 @@ export function PersonPage({ person, index, reload, onBack, onNavigate, onOpenPh
             onChanged={refreshEvents}
             onError={setError}
           />
+
+          <DocumentsCard personId={person.id} onError={setError} />
         </div>
       </main>
 

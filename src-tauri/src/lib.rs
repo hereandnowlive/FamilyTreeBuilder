@@ -72,6 +72,18 @@ const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "gif", "webp", "bmp",
 /// Formats the webview can play on both Windows and Linux.
 const AUDIO_EXTENSIONS: [&str; 7] = ["mp3", "m4a", "aac", "wav", "ogg", "opus", "flac"];
 
+/// The kinds of file that can be attached to a person as a document. Must match
+/// DOCUMENT_FILTER in src/fileFilters.ts.
+///
+/// This list is also a safety check. Opening a document hands it to whatever
+/// program the computer uses for that kind of file, and for a program or a
+/// script that would mean running it. A family file from someone else could
+/// carry anything, so only these harmless kinds are ever opened. The
+/// macro-carrying Office formats (.docm, .xlsm) are left out on purpose.
+const DOCUMENT_EXTENSIONS: [&str; 13] = [
+    "pdf", "doc", "docx", "odt", "rtf", "txt", "xls", "xlsx", "ods", "csv", "ppt", "pptx", "odp",
+];
+
 /// Turns any error into the plain `String` that Tauri sends back to the frontend,
 /// where it arrives as the rejected promise's value.
 ///
@@ -357,6 +369,71 @@ fn update_recording_title(app: AppHandle, id: String, title: String) -> Result<(
 fn delete_recording(app: AppHandle, id: String) -> Result<(), String> {
     let files = with_db(&app, |conn| db::delete_recording(conn, &id))?;
     remove_media_files(&app, &files)
+}
+
+// ---- documents -------------------------------------------------------------
+
+#[tauri::command(async)]
+fn list_documents(app: AppHandle, person_id: String) -> Result<Vec<Row>, String> {
+    with_db(&app, |conn| db::list_documents(conn, &person_id))
+}
+
+/// Copies a document (a PDF, a Word file and so on) into the media folder and
+/// attaches it to the person.
+#[tauri::command(async)]
+fn import_document(app: AppHandle, person_id: String, source: String, title: String) -> Result<(), String> {
+    let file_name = import_file(
+        &app,
+        &source,
+        &DOCUMENT_EXTENSIONS,
+        "Not a supported kind of document. PDF, Word, Excel, PowerPoint, OpenDocument and text files can be added.",
+    )?;
+    let result = with_db(&app, |conn| db::add_document(conn, &person_id, &file_name, &title));
+    if result.is_err() {
+        // No row points at the copy, so do not leave it behind.
+        let _ = remove_media_files(&app, &[file_name]);
+    }
+    result
+}
+
+#[tauri::command(async)]
+fn update_document_title(app: AppHandle, id: String, title: String) -> Result<(), String> {
+    with_db(&app, |conn| db::update_document_title(conn, &id, &title))
+}
+
+#[tauri::command(async)]
+fn delete_document(app: AppHandle, id: String) -> Result<(), String> {
+    let files = with_db(&app, |conn| db::delete_document(conn, &id))?;
+    remove_media_files(&app, &files)
+}
+
+/// Opens a stored document in the program the computer uses for that kind of
+/// file: a PDF in the PDF viewer, a .docx in Word or LibreOffice.
+///
+/// The frontend sends the document's id, not a path, so the only files this
+/// can ever open are ones recorded in the `document` table, and only if they
+/// are one of the allowed kinds (see `DOCUMENT_EXTENSIONS`).
+#[tauri::command(async)]
+fn open_document(app: AppHandle, id: String) -> Result<(), String> {
+    let file_name =
+        with_db(&app, |conn| db::document_file(conn, &id))?.ok_or("This document is no longer in the tree.")?;
+    require_bare_file_name(&file_name)?;
+
+    let path = media_dir(&app)?.join(&file_name);
+    // `is_some_and` is true only when there is an extension and it passes the test.
+    let allowed = path
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| DOCUMENT_EXTENSIONS.contains(&extension.to_lowercase().as_str()));
+    if !allowed {
+        return Err("This kind of file cannot be opened from the app. Use \"Save a copy\" instead.".into());
+    }
+    if !path.exists() {
+        return Err("The file for this document is missing from the app's storage.".into());
+    }
+    // `open::that` asks the operating system to open the file, the same as
+    // double-clicking it. https://docs.rs/open/
+    open::that(&path).map_err(|e| format!("The computer could not open this document: {e}"))
 }
 
 // ---- media files -----------------------------------------------------------
@@ -792,6 +869,11 @@ pub fn run() {
             list_recordings,
             update_recording_title,
             delete_recording,
+            list_documents,
+            import_document,
+            update_document_title,
+            delete_document,
+            open_document,
             get_media_dir,
             import_photo,
             import_recording,
