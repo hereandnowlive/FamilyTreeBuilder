@@ -1,0 +1,52 @@
+[package]
+name = "family-tree"
+version = "0.1.0"
+description = "Local family tree desktop app"
+authors = ["Mitchell"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "family_tree_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+cpal = "0.18.2"
+mp3lame-encoder = "0.2.5"
+
+
+# Compile dependencies with optimisations even in dev builds. Unoptimised image
+# decoding and MP3 encoding are roughly ten times slower, which makes thumbnails
+# crawl under `tauri dev`. The app's own code stays unoptimised, so it still
+# rebuilds fast; the dependencies are only compiled once.
+# https://doc.rust-lang.org/cargo/reference/profiles.html#overrides
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+debug = "line-tables-only"   # keeps file/line numbers in panics and backtraces, drops the rest
+
+# The release build deliberately leaves out `lto = true` and `codegen-units = 1`
+# from the Tauri template. Together they make the final step optimise the whole
+# program, about 500 crates, as one unit in one process. That is the most
+# memory-hungry setting Cargo has, on a machine that has already run out of
+# memory while building (see .cargo/config.toml). They would make the installer
+# a little smaller and no faster in any way that matters here.
+# `strip` costs nothing to build and removes debug symbols from the binary.
+[profile.release]
+strip = true

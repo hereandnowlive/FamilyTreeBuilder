@@ -1,0 +1,24 @@
+# Cargo settings for this project only. Cargo reads `.cargo/config.toml` from
+# the folder it is run in and every folder above it; Tauri runs Cargo from
+# `src-tauri/`, so this applies to `npm run app`, `npm run app:build`,
+# `cargo test` and rust-analyzer alike.
+# https://doc.rust-lang.org/cargo/reference/config.html
+
+[build]
+# How many compiler processes Cargo may run at once. The default is one per
+# logical CPU core (32 on this machine). A release build with 32 optimising
+# compilers needs more than the 30 GB of RAM installed, which froze the whole
+# computer, so the number is capped here. Builds take longer, but finish.
+# Raise it (16 is the next step to try) if memory stays comfortable; override
+# it for one command with `cargo build -j 16`.
+jobs = 8
+
+# Keep intermediate build files out of this folder, because its path contains
+# spaces ("Family History/Family Tree Project"). The LAME MP3 encoder is C code
+# built with libtool on Linux, and libtool cannot handle spaces in paths.
+# Finished binaries still land in src-tauri/target as usual.
+#
+# {cargo-cache-home} is Cargo's own folder (~/.cargo), and the hash keeps this
+# project's files apart from any other project's.
+# https://doc.rust-lang.org/cargo/reference/config.html#buildbuild-dir
+build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"
