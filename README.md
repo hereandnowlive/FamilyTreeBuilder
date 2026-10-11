@@ -131,19 +131,20 @@ Click any photo to open its own page.
 - **Caption** is the short title shown under the photo elsewhere.
 - **Description** is for everything else: who is in it, where and when it was taken, the story behind it.
 - **☆ Use as portrait** and **Delete photo** are at the top right.
+- **⟲ Rotate left** and **⟳ Rotate right** turn a photo that is sideways or upside down by a quarter turn, and save it that way everywhere it is shown. Use the button for the direction you want instead of going all the way round: a JPEG photo loses a very small amount of detail each time it is saved again. Animated GIF and AVIF pictures cannot be rotated in the app.
 - **Save a copy…** saves the photo as an ordinary picture file, starting on your Desktop, so you can print it, email it or use it elsewhere. The copy in the app stays where it is.
 
 The button at the top left, showing the person's name, takes you back to the same place on their page.
 
 ## Voice recordings
 
-Each photo can have recordings attached: someone telling the story behind it, or an old interview. They are listed on the photo's page under **Recordings**, each with its own player.
+Each photo can have recordings attached: someone telling the story behind it, or an old interview. They are listed on the photo's page under **Recordings**, each with its own player: press the round button to play or pause, and click or drag along the bar to move to another part. The time is shown beside it; for a recording made in the app, its full length may only appear once it has been played through.
 
 ### Recording in the app
 
 1. On the photo's page, press **● Record** and start talking.
 2. Watch the green bar. It should move as you speak. If it stays still, the app is not hearing you. See "If something goes wrong" below.
-3. Press **Stop and save** to keep the recording, or **Discard** to throw it away.
+3. Press **Stop and save** to keep the recording, or **Discard** to throw it away. A saved recording appears at the bottom of the list with a note saying it is saved.
 
 If you leave the page while recording, the recording is saved rather than lost.
 
@@ -305,7 +306,7 @@ Tauri builds for the system it runs on, so the Windows installer has to be built
 | `src/person/` | The person page, events, the photo page and the recorder controls. |
 | `src/merge/` | Merging a family file: `plan.ts` works out what would change, `MergePage.tsx` is the review screen. |
 | `src/help/` | The Help page, which displays the guide section of this file. |
-| `src-tauri/src/` | The Rust side: `lib.rs` (commands), `db.rs` (the database and every query), `merge.rs` (applying a merge), `family_file.rs`, `thumbnail.rs`, `recorder.rs`. |
+| `src-tauri/src/` | The Rust side: `lib.rs` (commands), `db.rs` (the database and every query), `merge.rs` (applying a merge), `family_file.rs`, `thumbnail.rs`, `rotate.rs`, `recorder.rs`. |
 | `tests/` | Tests for the merge planner. |
 | `src-tauri/migrations/` | The database schema, as numbered SQL files. |
 | `scripts/copy-installer.mjs` | Gathers the built installers into `installer/` at the end of `npm run app:build`. |

@@ -24,6 +24,8 @@ function meterPercent(peak: number): number {
 export function RecorderControl({ mediaId, onSaved, onError }: Props) {
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
+  // True between pressing "Stop and save" and the finished file being stored.
+  const [saving, setSaving] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
   // Read by the unmount cleanup, which would otherwise only see the first render's state.
@@ -63,6 +65,7 @@ export function RecorderControl({ mediaId, onSaved, onError }: Props) {
 
   async function stop(keep: boolean) {
     setBusy(true);
+    setSaving(keep);
     active.current = false;
     try {
       if (keep) await saveRecording(mediaId, recordingTitle());
@@ -72,6 +75,7 @@ export function RecorderControl({ mediaId, onSaved, onError }: Props) {
     }
     setRecording(false);
     setBusy(false);
+    setSaving(false);
     if (keep) onSaved();
   }
 
@@ -82,6 +86,8 @@ export function RecorderControl({ mediaId, onSaved, onError }: Props) {
       </Button>
     );
   }
+
+  if (saving) return <span className="text-muted">Saving your recording…</span>;
 
   const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
   return (

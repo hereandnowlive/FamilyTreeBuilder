@@ -590,6 +590,25 @@ pub fn add_media(conn: &Connection, person_id: &str, event_id: &str, file_name: 
     Ok(id)
 }
 
+/// Points a photo's row at a different file in the media folder, and returns
+/// the name of the file it used before. Fails if there is no such photo.
+pub fn replace_media_file(conn: &mut Connection, id: &str, file_name: &str) -> AnyResult<String> {
+    let tx = conn.transaction()?;
+    let old: Option<String> = tx
+        .query_row("SELECT file_name FROM media WHERE id = ?1", [id], |row| row.get(0))
+        .optional()?;
+    let old = old.ok_or("This photo is no longer in the tree.")?;
+    tx.execute("UPDATE media SET file_name = ?2 WHERE id = ?1", [id, file_name])?;
+    tx.commit()?;
+    Ok(old)
+}
+
+/// The file a photo is stored in, or `None` if there is no photo with that id.
+pub fn media_file(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT file_name FROM media WHERE id = ?1", [id], |row| row.get(0))
+        .optional()
+}
+
 pub fn update_caption(conn: &Connection, media_id: &str, caption: &str) -> rusqlite::Result<()> {
     conn.execute("UPDATE media SET caption = ?2 WHERE id = ?1", [media_id, caption])?;
     Ok(())
@@ -791,5 +810,17 @@ pub(crate) mod tests {
         let tree = load_tree(&conn).unwrap();
         assert_eq!(tree.people[0]["portrait_media_id"], Value::Null);
         assert_eq!(get_media(&conn, &photo).unwrap(), None);
+    }
+
+    #[test]
+    fn replacing_a_photos_file_returns_the_old_one() {
+        let mut conn = memory_db();
+        let ada = person(&conn, "Ada");
+        let event = create_event(&mut conn, &ada).unwrap();
+        let photo = add_media(&conn, &ada, &event, "old.jpg").unwrap();
+
+        assert_eq!(replace_media_file(&mut conn, &photo, "new.jpg").unwrap(), "old.jpg");
+        assert_eq!(media_file(&conn, &photo).unwrap().as_deref(), Some("new.jpg"));
+        assert!(replace_media_file(&mut conn, "no-such-photo", "x.jpg").is_err());
     }
 }

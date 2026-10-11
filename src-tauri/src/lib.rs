@@ -4,6 +4,7 @@ mod db;
 mod family_file;
 mod merge;
 mod recorder;
+mod rotate;
 mod thumbnail;
 
 use std::collections::HashMap;
@@ -307,6 +308,33 @@ fn update_description(app: AppHandle, media_id: String, description: String) -> 
 #[tauri::command(async)]
 fn set_portrait(app: AppHandle, person_id: String, media_id: Option<String>) -> Result<(), String> {
     with_db(&app, |conn| db::set_portrait(conn, &person_id, media_id.as_deref()))
+}
+
+/// Turns a photo a quarter turn and saves it that way. Returns the name of
+/// the file the photo is now stored in.
+///
+/// The turned picture is a new file under a new name, and the old one is
+/// deleted. A new name matters: thumbnails and the webview both remember a
+/// picture by its file name, and a merge treats two files with the same name
+/// as the same picture.
+#[tauri::command(async)]
+fn rotate_photo(app: AppHandle, id: String, clockwise: bool) -> Result<String, String> {
+    let media = media_dir(&app)?;
+    let old = with_db(&app, |conn| db::media_file(conn, &id))?.ok_or("This photo is no longer in the tree.")?;
+    require_bare_file_name(&old)?;
+
+    let stem = uuid::Uuid::new_v4().to_string();
+    let new = rotate::rotate(&media.join(&old), &media, &stem, clockwise).map_err(text)?;
+
+    // `&new` is borrowed by the closure, so `new` can still be returned below.
+    let swapped = with_db(&app, |conn| db::replace_media_file(conn, &id, &new));
+    if swapped.is_err() {
+        // No row points at the new file, so do not leave it behind.
+        let _ = remove_media_files(&app, std::slice::from_ref(&new));
+    }
+    // The row is safely pointing at the new file before the old one goes.
+    remove_media_files(&app, &[swapped?])?;
+    Ok(new)
 }
 
 #[tauri::command(async)]
@@ -759,6 +787,7 @@ pub fn run() {
             update_caption,
             update_description,
             set_portrait,
+            rotate_photo,
             delete_media,
             list_recordings,
             update_recording_title,

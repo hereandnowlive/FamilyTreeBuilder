@@ -8,6 +8,7 @@ import {
   importRecording,
   listRecordings,
   mediaUrl,
+  rotatePhoto,
   setPortrait,
   updateCaption,
   updateDescription,
@@ -17,6 +18,7 @@ import { saveCopyWithDialog } from "../familyFile";
 import { AUDIO_FILTER } from "../fileFilters";
 import { displayName } from "../relations";
 import type { Media, Person, Recording } from "../types";
+import { AudioPlayer } from "./AudioPlayer";
 import { RecorderControl } from "./RecorderControl";
 
 interface Props {
@@ -31,6 +33,10 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
   const [photo, setPhoto] = useState<Media | null>(null);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The recording just made with the Record button, so it can be pointed out in the list.
+  const [justRecordedId, setJustRecordedId] = useState<string | null>(null);
+  // True while a turned copy of the photo is being saved, which takes a moment for a large scan.
+  const [rotating, setRotating] = useState(false);
   const fail = (e: unknown) => setError(String(e));
 
   const refreshRecordings = useCallback(() => listRecordings(mediaId).then(setRecordings, fail), [mediaId]);
@@ -40,6 +46,11 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
     refreshRecordings();
   }, [mediaId, onBack, refreshRecordings]);
 
+  // The list can be longer than the window, so bring a new recording into view once it is listed.
+  useEffect(() => {
+    if (justRecordedId) document.getElementById(`recording-${justRecordedId}`)?.scrollIntoView({ block: "nearest" });
+  }, [justRecordedId]);
+
   if (!photo) return error ? <div className="p-8 text-danger">{error}</div> : null;
 
   const isPortrait = person.portrait_media_id === photo.id;
@@ -47,6 +58,20 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
   async function togglePortrait() {
     await setPortrait(person.id, isPortrait ? null : mediaId);
     await reload();
+  }
+
+  async function rotate(clockwise: boolean) {
+    setRotating(true);
+    setError(null);
+    try {
+      const fileName = await rotatePhoto(photo!, clockwise);
+      setPhoto({ ...photo!, file_name: fileName });
+      // The tree and the person page show this photo too, if it is the portrait.
+      await reload();
+    } catch (e) {
+      fail(e);
+    }
+    setRotating(false);
   }
 
   async function removePhoto() {
@@ -72,6 +97,18 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
     await refreshRecordings();
   }
 
+  /** Reloads the list after a recording is saved and works out which entry is the new one. */
+  async function showNewRecording() {
+    const known = new Set(recordings.map((recording) => recording.id));
+    try {
+      const latest = await listRecordings(mediaId);
+      setRecordings(latest);
+      setJustRecordedId(latest.find((recording) => !known.has(recording.id))?.id ?? null);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function removeRecording(recording: Recording) {
     if (!(await confirm("Remove this recording? The copy stored in the app will be deleted.", { kind: "warning" })))
       return;
@@ -84,6 +121,13 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
       <TopBar>
         <Button onClick={onBack}>← {displayName(person)}</Button>
         <div className="flex-1" />
+        {rotating && <span className="text-muted">Saving the turned photo…</span>}
+        <Button disabled={rotating} title="Turn the photo a quarter turn to the left" onClick={() => rotate(false)}>
+          ⟲ Rotate left
+        </Button>
+        <Button disabled={rotating} title="Turn the photo a quarter turn to the right" onClick={() => rotate(true)}>
+          ⟳ Rotate right
+        </Button>
         <Button onClick={togglePortrait}>{isPortrait ? "★ Portrait" : "☆ Use as portrait"}</Button>
         <Button onClick={() => saveCopyWithDialog(photo.file_name, photo.caption || "Photo").catch(fail)}>
           Save a copy…
@@ -98,7 +142,7 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
           {error && <p className="text-danger">{error}</p>}
 
           <img
-            className="mx-auto max-h-[70vh] max-w-full rounded-lg"
+            className={`mx-auto max-h-[70vh] max-w-full rounded-lg ${rotating ? "opacity-50" : ""}`}
             src={mediaUrl(photo.file_name)}
             alt={photo.caption}
           />
@@ -107,7 +151,7 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
             title="Recordings"
             action={
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <RecorderControl mediaId={mediaId} onSaved={refreshRecordings} onError={setError} />
+                <RecorderControl mediaId={mediaId} onSaved={showNewRecording} onError={setError} />
                 <Button onClick={addRecordings}>+ Add audio</Button>
               </div>
             }
@@ -119,7 +163,11 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
             ) : (
               <ul className="flex flex-col gap-4">
                 {recordings.map((recording) => (
-                  <li className="flex flex-col gap-2" key={recording.id}>
+                  <li
+                    className="flex flex-col gap-2"
+                    key={recording.id}
+                    id={`recording-${recording.id}`}
+                  >
                     <div className="flex items-center gap-2">
                       <input
                         className={inputClass}
@@ -144,6 +192,12 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
                       </Button>
                     </div>
                     <AudioPlayer fileName={recording.file_name} />
+                    {recording.id === justRecordedId && (
+                      <p className="text-accent">
+                        ✓ Your recording is saved with this photo. Press play to hear it back, or type a name for it
+                        above.
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -175,37 +229,4 @@ export function PhotoPage({ person, mediaId, reload, onBack }: Props) {
       </main>
     </div>
   );
-}
-
-/**
- * Plays a stored recording. The file is fetched and handed to the player as a blob URL because
- * WebKitGTK, the webview on Linux, cannot play media straight from Tauri's asset protocol.
- */
-function AudioPlayer({ fileName }: { fileName: string }) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let url: string | null = null;
-    let cancelled = false;
-    fetch(mediaUrl(fileName))
-      .then((response) => {
-        if (!response.ok) throw new Error(response.statusText);
-        return response.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        url = URL.createObjectURL(blob);
-        setSrc(url);
-      })
-      .catch(() => !cancelled && setFailed(true));
-    return () => {
-      cancelled = true;
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [fileName]);
-
-  if (failed) return <p className="text-danger">This recording could not be played on this computer.</p>;
-  if (!src) return <p className="text-muted">Loading recording…</p>;
-  return <audio className="w-full" controls preload="metadata" src={src} onError={() => setFailed(true)} />;
 }

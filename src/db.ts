@@ -205,6 +205,14 @@ export function setPortrait(personId: string, mediaId: string | null): Promise<v
   return invoke("set_portrait", { personId, mediaId });
 }
 
+/**
+ * Turns the photo a quarter turn and saves it that way. Returns the name of the file it is now
+ * stored in, which is a new one: use it in place of `media.file_name`.
+ */
+export function rotatePhoto(media: Media, clockwise: boolean): Promise<string> {
+  return invoke<string>("rotate_photo", { id: media.id, clockwise });
+}
+
 /** Removes the photo and the recordings attached to it (rows and files). */
 export function deleteMedia(media: Media): Promise<void> {
   return invoke("delete_media", { id: media.id });
